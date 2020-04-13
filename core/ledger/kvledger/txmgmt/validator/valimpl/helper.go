@@ -9,7 +9,6 @@ package valimpl
 import (
 	"bytes"
 	"fmt"
-
 	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/core/ledger/customtx"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/privacyenabledstate"
@@ -22,8 +21,11 @@ import (
 	"github.com/hyperledger/fabric/core/ledger/util"
 	"github.com/hyperledger/fabric/protos/common"
 	"github.com/hyperledger/fabric/protos/ledger/rwset"
+	"github.com/hyperledger/fabric/protos/ledger/rwset/kvrwset"
 	"github.com/hyperledger/fabric/protos/peer"
 	"github.com/hyperledger/fabric/protos/utils"
+	"strconv"
+	"strings"
 )
 
 // validateAndPreparePvtBatch pulls out the private write-set for the transactions that are marked as valid
@@ -95,14 +97,15 @@ func validatePvtdata(tx *internal.Transaction, pvtdata *ledger.TxPvtData) error 
 
 // preprocessProtoBlock parses the proto instance of block into 'Block' structure.
 // The retuned 'Block' structure contains only transactions that are endorser transactions and are not alredy marked as invalid
-func preprocessProtoBlock(txMgr txmgr.TxMgr,
-	validateKVFunc func(key string, value []byte) error,
-	block *common.Block, doMVCCValidation bool,
-) (*internal.Block, []*txmgr.TxStatInfo, error) {
+func preprocessProtoBlock(txMgr txmgr.TxMgr, validateKVFunc func(key string, value []byte) error, db privacyenabledstate.DB, block *common.Block, doMVCCValidation bool, ) (*internal.Block, []*txmgr.TxStatInfo, error) {
 	b := &internal.Block{Num: block.Header.Number}
 	txsStatInfo := []*txmgr.TxStatInfo{}
 	// Committer validator has already set validation flags based on well formed tran checks
 	txsFilter := util.TxValidationFlags(block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
+
+	var allCertBalance map[string]string /*创建集合 */
+	allCertBalance = make(map[string]string)
+
 	for txIndex, envBytes := range block.Data.Data {
 		var env *common.Envelope
 		var chdr *common.ChannelHeader
@@ -110,6 +113,7 @@ func preprocessProtoBlock(txMgr txmgr.TxMgr,
 		var err error
 		txStatInfo := &txmgr.TxStatInfo{TxType: -1}
 		txsStatInfo = append(txsStatInfo, txStatInfo)
+
 		if env, err = utils.GetEnvelopeFromBlock(envBytes); err == nil {
 			if payload, err = utils.GetPayload(env); err == nil {
 				chdr, err = utils.UnmarshalChannelHeader(payload.Header.ChannelHeader)
@@ -138,12 +142,18 @@ func preprocessProtoBlock(txMgr txmgr.TxMgr,
 				txsFilter.SetFlag(txIndex, peer.TxValidationCode_NIL_TXACTION)
 				continue
 			}
+
 			txStatInfo.ChaincodeID = respPayload.ChaincodeId
 			txRWSet = &rwsetutil.TxRwSet{}
 			if err = txRWSet.FromProtoBytes(respPayload.Results); err != nil {
 				txsFilter.SetFlag(txIndex, peer.TxValidationCode_INVALID_OTHER_REASON)
 				continue
-			}
+			}//else{
+			//	if respPayload.ChaincodeId.Name != "lscc"{
+			//		txRWSet.GetUpdateBalance(cert,db)
+			//	}
+			//}
+
 		} else {
 			rwsetProto, err := processNonEndorserTx(env, chdr.TxId, txType, txMgr, !doMVCCValidation)
 			if _, ok := err.(*customtx.InvalidTxError); ok {
@@ -168,10 +178,73 @@ func preprocessProtoBlock(txMgr txmgr.TxMgr,
 				txsFilter.SetFlag(txIndex, peer.TxValidationCode_INVALID_WRITESET)
 				continue
 			}
+
+			err := processCertBalance(txRWSet, allCertBalance)
+			if err != nil{
+				logger.Warningf("Channel [%s]: Block [%d] Transaction index [%d] TxId [%s]"+
+					" marked as invalid. Reason code [%s]",
+					chdr.GetChannelId(), block.Header.Number, txIndex, chdr.GetTxId(), peer.TxValidationCode_INVALID_WRITESET)
+				txsFilter.SetFlag(txIndex, peer.TxValidationCode_INVALID_WRITESET)
+				continue
+			}
+
 			b.Txs = append(b.Txs, &internal.Transaction{IndexInBlock: txIndex, ID: chdr.TxId, RWSet: txRWSet})
 		}
 	}
 	return b, txsStatInfo, nil
+}
+
+func processCertBalance(txRWSet *rwsetutil.TxRwSet, allCertBalance map[string]string) error{
+	for _, NsRwSet := range txRWSet.NsRwSets{
+		if NsRwSet.NameSpace == "balance"{
+			for _, write := range NsRwSet.KvRwSet.Writes{
+				strSpendKey := strings.Split(write.Key, "-----END CERTIFICATE-----\n")
+				realKey := strSpendKey[0] + "-----END CERTIFICATE-----\n"
+				certBalance := strSpendKey[1]
+				if len(certBalance) == 0{
+					return nil
+				}
+				spend := string(write.Value)
+				temBalance, ok := allCertBalance[realKey]
+				if ok{
+					err := checkAndUpdateCertBalance(allCertBalance, realKey, spend,
+						temBalance, write)
+					if err != nil{
+						return err
+					}
+				}else{
+					allCertBalance[realKey] = certBalance
+					temBalance, _ := allCertBalance[realKey]
+					err := checkAndUpdateCertBalance(allCertBalance, realKey, spend,
+						temBalance, write)
+					if err != nil{
+						return err
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func checkAndUpdateCertBalance(allCertBalance map[string]string, realKey string, spend string,
+	temBalance string, write *kvrwset.KVWrite) error{
+	intTemBalance, err := strconv.Atoi(temBalance)
+	intSpend, err := strconv.Atoi(spend)
+	if err != nil {
+		return err
+	}
+	if intTemBalance >= intSpend {
+		intTemBalance = intTemBalance - intSpend
+		allCertBalance[realKey] = strconv.Itoa(intTemBalance)
+		write.Key = realKey
+		write.Value = []byte(strconv.Itoa(intTemBalance))
+	} else {
+		return err
+	}
+
+	return nil
 }
 
 func processNonEndorserTx(txEnv *common.Envelope, txid string, txType common.HeaderType, txmgr txmgr.TxMgr, synchingState bool) (*rwset.TxReadWriteSet, error) {
