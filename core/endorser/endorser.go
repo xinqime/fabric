@@ -9,7 +9,9 @@ package endorser
 import (
 	"context"
 	"fmt"
+	"github.com/hyperledger/fabric/protos/ledger/rwset/kvrwset"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/golang/protobuf/proto"
@@ -132,6 +134,7 @@ func NewEndorserServer(privDist privateDataDistributor, s Support, pr *platforms
 // call specified chaincode (system or user)
 func (e *Endorser) callChaincode(txParams *ccprovider.TransactionParams, version string, input *pb.ChaincodeInput, cid *pb.ChaincodeID) (*pb.Response, *pb.ChaincodeEvent, error) {
 	endorserLogger.Infof("[%s][%s] Entry chaincode: %s", txParams.ChannelID, shorttxid(txParams.TxID), cid)
+
 	defer func(start time.Time) {
 		logger := endorserLogger.WithOptions(zap.AddCallerSkip(1))
 		elapsedMilliseconds := time.Since(start).Round(time.Millisecond) / time.Millisecond
@@ -192,7 +195,6 @@ func (e *Endorser) callChaincode(txParams *ccprovider.TransactionParams, version
 		}
 	}
 	// ----- END -------
-
 	return res, ccevent, err
 }
 
@@ -244,6 +246,7 @@ func (e *Endorser) SimulateProposal(txParams *ccprovider.TransactionParams, cid 
 	var pubSimResBytes []byte
 	var res *pb.Response
 	var ccevent *pb.ChaincodeEvent
+
 	res, ccevent, err = e.callChaincode(txParams, version, cis.ChaincodeSpec.Input, cid)
 	if err != nil {
 		endorserLogger.Errorf("[%s][%s] failed to invoke chaincode %s, error: %+v", txParams.ChannelID, shorttxid(txParams.TxID), cid, err)
@@ -255,7 +258,11 @@ func (e *Endorser) SimulateProposal(txParams *ccprovider.TransactionParams, cid 
 			txParams.TXSimulator.Done()
 			return nil, nil, nil, nil, err
 		}
-
+		err = e.checkBalance(txParams,simResult,cid.Name)
+		if   err != nil{
+			txParams.TXSimulator.Done()
+			return nil, nil, nil, nil, err
+		}
 		if simResult.PvtSimulationResults != nil {
 			if cid.Name == "lscc" {
 				// TODO: remove once we can store collection configuration outside of LSCC
@@ -291,6 +298,57 @@ func (e *Endorser) SimulateProposal(txParams *ccprovider.TransactionParams, cid 
 		}
 	}
 	return cdLedger, res, pubSimResBytes, ccevent, nil
+}
+
+func (e *Endorser) checkBalance(txParams *ccprovider.TransactionParams, simResult *ledger.TxSimulationResults, chaincodeName string) error {
+	if !e.s.IsSysCC(chaincodeName) && chaincodeName != "balance"{
+		var spendKey string
+		var spendValue string
+		simNsRwSet := simResult.PubSimulationResults.NsRwset
+		for _,nsRw := range simNsRwSet{
+			if nsRw.Namespace == "balance"{
+				KvRwSet := &kvrwset.KVRWSet{}
+				if err := proto.Unmarshal(nsRw.Rwset, KvRwSet); err != nil {
+					return err
+				}
+				for _, write := range KvRwSet.Writes {
+					spendKey = write.Key
+					spendValue = string(write.Value)
+				}
+			}
+		}
+
+		if len(spendKey) !=0 && len(spendValue) != 0 {
+			var certBalance string
+			strSpendKey := strings.Split(spendKey, "-----END CERTIFICATE-----\n")
+			if len(strSpendKey) > 0{
+				certBalance = strSpendKey[1]
+			}else{
+				return errors.New("split error")
+			}
+
+
+			endorserLogger.Info("本次余额为",certBalance)
+			endorserLogger.Info("本次花费为",spendValue)
+
+			intCertBalance, err := strconv.Atoi(certBalance)
+			if err != nil {
+				return err
+			}
+
+			intSpendValue, err := strconv.Atoi(spendValue)
+			//判断余额是否够用
+			if err != nil {
+				return err
+			}
+
+			if intSpendValue > intCertBalance {
+				return errors.New("Your balance is not enough")
+			}
+			endorserLogger.Info("余额充足")
+		}
+	}
+	return nil
 }
 
 // endorse the proposal by calling the ESCC
@@ -355,6 +413,15 @@ func (e *Endorser) preProcess(signedProp *pb.SignedProposal) (*validateResult, e
 		vr.resp = &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: err.Error()}}
 		return vr, err
 	}
+
+	//if !e.s.IsSysCC(hdrExt.ChaincodeId.Name){
+	//
+	//	_, err = getBalance(hdr.SignatureHeader,prop)
+	//	if err != nil {
+	//		vr.resp = &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: err.Error()}}
+	//		return vr, err
+	//	}
+	//}
 
 	chdr, err := putils.UnmarshalChannelHeader(hdr.ChannelHeader)
 	if err != nil {
@@ -424,10 +491,8 @@ func (e *Endorser) ProcessProposal(ctx context.Context, signedProp *pb.SignedPro
 	// start time for computing elapsed time metric for successfully endorsed proposals
 	startTime := time.Now()
 	e.Metrics.ProposalsReceived.Add(1)
-
 	addr := util.ExtractRemoteAddress(ctx)
 	endorserLogger.Debug("Entering: request from", addr)
-
 	// variables to capture proposal duration metric
 	var chainID string
 	var hdrExt *pb.ChaincodeHeaderExtension
