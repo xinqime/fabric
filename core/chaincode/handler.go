@@ -1110,8 +1110,8 @@ func (h *Handler) HandlePutState(msg *pb.ChaincodeMessage, txContext *Transactio
 			var dataLen int
 			dataLen = len(putState.Key) + len(putState.Value)
 
-			spendValueByte := []byte(strconv.Itoa(dataLen))
-			err = txContext.TXSimulator.SetState(defaultChaincodeName, cert+string(certBalance), spendValueByte)
+			balanceSpendValueByte := []byte(string(certBalance)+","+strconv.Itoa(dataLen))
+			err = txContext.TXSimulator.SetState(defaultChaincodeName, cert, balanceSpendValueByte)
 			if err != nil {
 				return nil, errors.Errorf("Failed to setstate spend")
 			}
