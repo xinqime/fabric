@@ -303,7 +303,7 @@ func (e *Endorser) SimulateProposal(txParams *ccprovider.TransactionParams, cid 
 func (e *Endorser) checkBalance(txParams *ccprovider.TransactionParams, simResult *ledger.TxSimulationResults, chaincodeName string) error {
 	if !e.s.IsSysCC(chaincodeName) && chaincodeName != "balance"{
 		var spendKey string
-		var spendValue string
+		var balanceSpendValue string
 		simNsRwSet := simResult.PubSimulationResults.NsRwset
 		for _,nsRw := range simNsRwSet{
 			if nsRw.Namespace == "balance"{
@@ -313,30 +313,32 @@ func (e *Endorser) checkBalance(txParams *ccprovider.TransactionParams, simResul
 				}
 				for _, write := range KvRwSet.Writes {
 					spendKey = write.Key
-					spendValue = string(write.Value)
+					balanceSpendValue = string(write.Value)
 				}
 			}
 		}
 
-		if len(spendKey) !=0 && len(spendValue) != 0 {
+		if len(spendKey) !=0 && len(balanceSpendValue) != 0 {
 			var certBalance string
-			strSpendKey := strings.Split(spendKey, "-----END CERTIFICATE-----\n")
-			if len(strSpendKey) > 0{
-				certBalance = strSpendKey[1]
+			var spend string
+			strBalanceSpendValue := strings.Split(balanceSpendValue, ",")
+			if len(strBalanceSpendValue) > 0{
+				certBalance = strBalanceSpendValue[0]
+				spend = strBalanceSpendValue[1]
 			}else{
 				return errors.New("split error")
 			}
 
 
 			endorserLogger.Info("本次余额为",certBalance)
-			endorserLogger.Info("本次花费为",spendValue)
+			endorserLogger.Info("本次花费为",spend)
 
 			intCertBalance, err := strconv.Atoi(certBalance)
 			if err != nil {
 				return err
 			}
 
-			intSpendValue, err := strconv.Atoi(spendValue)
+			intSpendValue, err := strconv.Atoi(spend)
 			//判断余额是否够用
 			if err != nil {
 				return err
