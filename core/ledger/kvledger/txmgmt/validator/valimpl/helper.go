@@ -197,6 +197,10 @@ func preprocessProtoBlock(txMgr txmgr.TxMgr, validateKVFunc func(key string, val
 func processCertBalance(txRWSet *rwsetutil.TxRwSet, allCertBalance map[string]string) error{
 	for _, NsRwSet := range txRWSet.NsRwSets{
 		if NsRwSet.NameSpace == "balance"{
+			//读集置空
+			for _, read := range NsRwSet.KvRwSet.Reads{
+				read.Reset()
+			}
 			for _, write := range NsRwSet.KvRwSet.Writes{
 				strBalanceSpendValue := strings.Split(string(write.Value), ",")
 				if len(strBalanceSpendValue) == 1{
@@ -234,13 +238,9 @@ func checkAndUpdateCertBalance(allCertBalance map[string]string, key string, spe
 	if err != nil {
 		return err
 	}
-	if intTemBalance >= intSpend {
-		intTemBalance = intTemBalance - intSpend
-		allCertBalance[key] = strconv.Itoa(intTemBalance)
-		write.Value = []byte(strconv.Itoa(intTemBalance))
-	} else {
-		return err
-	}
+	intTemBalance = intTemBalance - intSpend
+	allCertBalance[key] = strconv.Itoa(intTemBalance)
+	write.Value = []byte(strconv.Itoa(intTemBalance))
 
 	return nil
 }
