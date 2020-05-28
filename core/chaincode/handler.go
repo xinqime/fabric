@@ -662,6 +662,12 @@ func (h *Handler) HandleGetState(msg *pb.ChaincodeMessage, txContext *Transactio
 		chaincodeLogger.Debugf("[%s] No state associated with key: %s. Sending %s with an empty payload", shorttxid(msg.Txid), getState.Key, pb.ChaincodeMessage_RESPONSE)
 	}
 
+	dataLen := len(getState.Key) + len(getState.Collection) +len(res)
+	err = h.createBalanceRwset(chaincodeName,dataLen,txContext)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
 	// Send response msg back to chaincode. GetState will not trigger event
 	return &pb.ChaincodeMessage{Type: pb.ChaincodeMessage_RESPONSE, Payload: res, Txid: msg.Txid, ChannelId: msg.ChannelId}, nil
 }
@@ -687,6 +693,13 @@ func (h *Handler) HandleGetPrivateDataHash(msg *pb.ChaincodeMessage, txContext *
 	if res == nil {
 		chaincodeLogger.Debugf("[%s] No state associated with key: %s. Sending %s with an empty payload", shorttxid(msg.Txid), getState.Key, pb.ChaincodeMessage_RESPONSE)
 	}
+
+	dataLen := len(getState.Key) + len(getState.Collection) +len(res)
+	err = h.createBalanceRwset(chaincodeName,dataLen,txContext)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
 	// Send response msg back to chaincode. GetState will not trigger event
 	return &pb.ChaincodeMessage{Type: pb.ChaincodeMessage_RESPONSE, Payload: res, Txid: msg.Txid, ChannelId: msg.ChannelId}, nil
 }
@@ -729,6 +742,12 @@ func (h *Handler) HandleGetStateMetadata(msg *pb.ChaincodeMessage, txContext *Tr
 		metadataResult.Entries = append(metadataResult.Entries, md)
 	}
 	res, err := proto.Marshal(&metadataResult)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	dataLen := len(getStateMetadata.Key) + len(getStateMetadata.Collection) + len(res)
+	err = h.createBalanceRwset(chaincodeName,dataLen,txContext)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -805,6 +824,14 @@ func (h *Handler) HandleGetStateByRange(msg *pb.ChaincodeMessage, txContext *Tra
 		txContext.CleanupQueryContext(iterID)
 		return nil, errors.Wrap(err, "marshal failed")
 	}
+	//待处理
+	dataLen := len(getStateByRange.StartKey) + len(getStateByRange.EndKey) +
+		len(getStateByRange.Collection) + len(getStateByRange.Metadata) +
+		len(payloadBytes)
+	err = h.createBalanceRwset(chaincodeName,dataLen,txContext)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
 
 	chaincodeLogger.Debugf("Got keys and values. Sending %s", pb.ChaincodeMessage_RESPONSE)
 	return &pb.ChaincodeMessage{Type: pb.ChaincodeMessage_RESPONSE, Payload: payloadBytes, Txid: msg.Txid, ChannelId: msg.ChannelId}, nil
@@ -837,6 +864,7 @@ func (h *Handler) HandleQueryStateNext(msg *pb.ChaincodeMessage, txContext *Tran
 		return nil, errors.Wrap(err, "marshal failed")
 	}
 
+	//待处理
 	return &pb.ChaincodeMessage{Type: pb.ChaincodeMessage_RESPONSE, Payload: payloadBytes, Txid: msg.Txid, ChannelId: msg.ChannelId}, nil
 }
 
@@ -922,6 +950,12 @@ func (h *Handler) HandleGetQueryResult(msg *pb.ChaincodeMessage, txContext *Tran
 		txContext.CleanupQueryContext(iterID)
 		return nil, errors.Wrap(err, "marshal failed")
 	}
+	dataLen := len(getQueryResult.Query) + len(getQueryResult.Collection) +
+		len(getQueryResult.Metadata) + len(payloadBytes)
+	err = h.createBalanceRwset(chaincodeName,dataLen,txContext)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
 
 	chaincodeLogger.Debugf("Got keys and values. Sending %s", pb.ChaincodeMessage_RESPONSE)
 	return &pb.ChaincodeMessage{Type: pb.ChaincodeMessage_RESPONSE, Payload: payloadBytes, Txid: msg.Txid, ChannelId: msg.ChannelId}, nil
@@ -958,6 +992,11 @@ func (h *Handler) HandleGetHistoryForKey(msg *pb.ChaincodeMessage, txContext *Tr
 		return nil, errors.Wrap(err, "marshal failed")
 	}
 
+	dataLen := len(getHistoryForKey.Key) +  len(payloadBytes)
+	err = h.createBalanceRwset(chaincodeName,dataLen,txContext)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
 	chaincodeLogger.Debugf("Got keys and values. Sending %s", pb.ChaincodeMessage_RESPONSE)
 	return &pb.ChaincodeMessage{Type: pb.ChaincodeMessage_RESPONSE, Payload: payloadBytes, Txid: msg.Txid, ChannelId: msg.ChannelId}, nil
 }
@@ -1073,28 +1112,37 @@ func (h *Handler) HandlePutState(msg *pb.ChaincodeMessage, txContext *Transactio
 		err = txContext.TXSimulator.SetState(chaincodeName, putState.Key, putState.Value)
 	}
 	if err != nil {
-		txContext.TXSimulator = nil
 		return nil, errors.WithStack(err)
 	}
 
+	dataLen := len(putState.Key) + len(putState.Value) + len(putState.Collection)
+	err = h.createBalanceRwset(chaincodeName,dataLen,txContext)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	return &pb.ChaincodeMessage{Type: pb.ChaincodeMessage_RESPONSE, Txid: msg.Txid, ChannelId: msg.ChannelId}, nil
+}
+
+func (h *Handler) createBalanceRwset(chaincodeName string, dataLen int, txContext *TransactionContext) error{
 	defaultChaincodeName := "balance"
 	//判断是否为系统链码或者充值链码，充值链码名称默认为balance
 	if !h.SystemCCProvider.IsSysCC(chaincodeName) && chaincodeName != defaultChaincodeName{
 		//开始获得背书发起者cert
 		hdr, err := utils.GetHeader(txContext.Proposal.Header)
 		if err != nil {
-			return nil, errors.WithStack(err)
+			return err
 		}
 
 		shdr, err := utils.GetSignatureHeader(hdr.SignatureHeader)
 		if err != nil {
-			return nil, errors.WithStack(err)
+			return err
 		}
 
 		si := &msp.SerializedIdentity{}
 		err = proto.Unmarshal(shdr.Creator, si)
 		if err != nil {
-			return nil, errors.WithStack(err)
+			return err
 		}
 
 		cert := string(si.GetIdBytes())
@@ -1102,24 +1150,19 @@ func (h *Handler) HandlePutState(msg *pb.ChaincodeMessage, txContext *Transactio
 		//balance为默认充值链码名，获得cert余额
 		certBalance,err := txContext.TXSimulator.GetState(defaultChaincodeName,cert)
 		if err != nil {
-			return nil, errors.Errorf("Failed to get  balance")
+			return errors.Errorf("Failed to get  balance")
 		}
 		if len(certBalance) != 0 && string(certBalance) != "false" {
-
-			//获得本次花费
-			var dataLen int
-			dataLen = len(putState.Key) + len(putState.Value)
-
 			balanceSpendValueByte := []byte(string(certBalance)+","+strconv.Itoa(dataLen))
 			err = txContext.TXSimulator.SetState(defaultChaincodeName, cert, balanceSpendValueByte)
 			if err != nil {
-				return nil, errors.Errorf("Failed to setstate spend")
+				return errors.Errorf("Failed to setstate spend")
 			}
 		}
 
 	}
 
-	return &pb.ChaincodeMessage{Type: pb.ChaincodeMessage_RESPONSE, Txid: msg.Txid, ChannelId: msg.ChannelId}, nil
+	return nil
 }
 
 func (h *Handler) HandlePutStateMetadata(msg *pb.ChaincodeMessage, txContext *TransactionContext) (*pb.ChaincodeMessage, error) {
@@ -1151,6 +1194,13 @@ func (h *Handler) HandlePutStateMetadata(msg *pb.ChaincodeMessage, txContext *Tr
 		return nil, errors.WithStack(err)
 	}
 
+	dataLen := len(putStateMetadata.Key) + len(putStateMetadata.Metadata.Metakey) +
+		len(putStateMetadata.Metadata.Value) + len(putStateMetadata.Collection)
+	err = h.createBalanceRwset(chaincodeName,dataLen,txContext)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
 	return &pb.ChaincodeMessage{Type: pb.ChaincodeMessage_RESPONSE, Txid: msg.Txid, ChannelId: msg.ChannelId}, nil
 }
 
@@ -1175,6 +1225,11 @@ func (h *Handler) HandleDelState(msg *pb.ChaincodeMessage, txContext *Transactio
 		return nil, errors.WithStack(err)
 	}
 
+	dataLen := len(delState.Key) + len(delState.Collection)
+	err = h.createBalanceRwset(chaincodeName,dataLen,txContext)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
 	// Send response msg back to chaincode.
 	return &pb.ChaincodeMessage{Type: pb.ChaincodeMessage_RESPONSE, Txid: msg.Txid, ChannelId: msg.ChannelId}, nil
 }
@@ -1248,6 +1303,7 @@ func (h *Handler) HandleInvokeChaincode(msg *pb.ChaincodeMessage, txContext *Tra
 	chaincodeLogger.Debugf("[%s] getting chaincode data for %s on channel %s", shorttxid(msg.Txid), targetInstance.ChaincodeName, targetInstance.ChainID)
 
 	version := h.SystemCCVersion
+	chaincodeLogger.Info(version,1111111111111111)
 	if !h.SystemCCProvider.IsSysCC(targetInstance.ChaincodeName) {
 		// if its a user chaincode, get the details
 		cd, err := h.DefinitionGetter.ChaincodeDefinition(targetInstance.ChaincodeName, txParams.TXSimulator)
@@ -1256,6 +1312,7 @@ func (h *Handler) HandleInvokeChaincode(msg *pb.ChaincodeMessage, txContext *Tra
 		}
 
 		version = cd.CCVersion()
+		chaincodeLogger.Info(version,2222222222222222222)
 
 		err = h.InstantiationPolicyChecker.CheckInstantiationPolicy(targetInstance.ChaincodeName, version, cd.(*ccprovider.ChaincodeData))
 		if err != nil {
