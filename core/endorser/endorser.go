@@ -225,14 +225,13 @@ func (e *Endorser) SimulateProposal(txParams *ccprovider.TransactionParams, cid 
 
 	var cdLedger ccprovider.ChaincodeDefinition
 	var version string
-
+	
 	if !e.s.IsSysCC(cid.Name) {
 		cdLedger, err = e.s.GetChaincodeDefinition(cid.Name, txParams.TXSimulator)
 		if err != nil {
 			return nil, nil, nil, nil, errors.WithMessage(err, fmt.Sprintf("make sure the chaincode %s has been successfully instantiated and try again", cid.Name))
 		}
 		version = cdLedger.CCVersion()
-
 		err = e.s.CheckInstantiationPolicy(cid.Name, version, cdLedger)
 		if err != nil {
 			return nil, nil, nil, nil, err
@@ -259,7 +258,7 @@ func (e *Endorser) SimulateProposal(txParams *ccprovider.TransactionParams, cid 
 			return nil, nil, nil, nil, err
 		}
 		err = e.checkBalance(txParams,simResult,cid.Name)
-		if   err != nil{
+		if err != nil{
 			txParams.TXSimulator.Done()
 			return nil, nil, nil, nil, err
 		}
@@ -304,6 +303,7 @@ func (e *Endorser) checkBalance(txParams *ccprovider.TransactionParams, simResul
 	if !e.s.IsSysCC(chaincodeName) && chaincodeName != "balance"{
 		var spendKey string
 		var balanceSpendValue string
+		var onlyRead bool
 		simNsRwSet := simResult.PubSimulationResults.NsRwset
 		for _,nsRw := range simNsRwSet{
 			if nsRw.Namespace == "balance"{
@@ -314,6 +314,16 @@ func (e *Endorser) checkBalance(txParams *ccprovider.TransactionParams, simResul
 				for _, write := range KvRwSet.Writes {
 					spendKey = write.Key
 					balanceSpendValue = string(write.Value)
+				}
+			}else{
+				if nsRw.Namespace != "lscc"{
+					KvRwSet := &kvrwset.KVRWSet{}
+					if err := proto.Unmarshal(nsRw.Rwset, KvRwSet); err != nil {
+						return err
+					}
+					if len(KvRwSet.Writes) == 0{
+						onlyRead = true
+					}
 				}
 			}
 		}
@@ -345,7 +355,11 @@ func (e *Endorser) checkBalance(txParams *ccprovider.TransactionParams, simResul
 			}
 
 			if intSpendValue > intCertBalance {
-				return errors.New("Your balance is not enough")
+				if onlyRead{
+					return errors.New("onlyRead")
+				}else{
+					return errors.New("Your balance is not enough")
+				}
 			}
 			endorserLogger.Info("余额充足")
 		}
@@ -566,7 +580,17 @@ func (e *Endorser) ProcessProposal(ctx context.Context, signedProp *pb.SignedPro
 	// 1 -- simulate
 	cd, res, simulationResult, ccevent, err := e.SimulateProposal(txParams, hdrExt.ChaincodeId)
 	if err != nil {
-		return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: err.Error()}}, nil
+		if res != nil {
+			endorserLogger.Errorf("[%s][%s] simulateProposal() resulted in chaincode %s response status %d for txid: %s", chainID, shorttxid(txid), hdrExt.ChaincodeId, res.Status, txid)
+			var cceventBytes []byte
+			pResp, err := putils.CreateProposalResponseFailure(prop.Header, prop.Payload, res, simulationResult, cceventBytes, hdrExt.ChaincodeId, hdrExt.PayloadVisibility)
+			if err != nil {
+				return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: err.Error()}}, nil
+			}
+			return pResp, nil
+		}else{
+			return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: err.Error()}}, nil
+		}
 	}
 	if res != nil {
 		if res.Status >= shim.ERROR {
