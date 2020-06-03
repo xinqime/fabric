@@ -1125,8 +1125,8 @@ func (h *Handler) HandlePutState(msg *pb.ChaincodeMessage, txContext *Transactio
 }
 
 func (h *Handler) createBalanceRwset(chaincodeName string, dataLen int, txContext *TransactionContext) error{
-	defaultChaincodeName := "balance"
-	//判断是否为系统链码或者充值链码，充值链码名称默认为balance
+	defaultChaincodeName := "bscc"
+	//判断是否为系统链码或者充值链码，充值链码名称默认为bscc
 	if !h.SystemCCProvider.IsSysCC(chaincodeName) && chaincodeName != defaultChaincodeName{
 		//开始获得背书发起者cert
 		hdr, err := utils.GetHeader(txContext.Proposal.Header)
