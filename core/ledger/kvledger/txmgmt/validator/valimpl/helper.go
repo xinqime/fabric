@@ -196,7 +196,7 @@ func preprocessProtoBlock(txMgr txmgr.TxMgr, validateKVFunc func(key string, val
 
 func processCertBalance(txRWSet *rwsetutil.TxRwSet, allCertBalance map[string]string) error{
 	for _, NsRwSet := range txRWSet.NsRwSets{
-		if NsRwSet.NameSpace == "balance"{
+		if NsRwSet.NameSpace == "bscc"{
 			//读集置空
 			for _, read := range NsRwSet.KvRwSet.Reads{
 				read.Reset()
