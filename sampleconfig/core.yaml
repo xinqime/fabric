@@ -520,7 +520,7 @@ chaincode:
         # tools added for java shim layer packaging.
         # This image is packed with shim layer libraries that are necessary
         # for Java chaincode runtime.
-        runtime: $(DOCKER_NS)/fabric-javaenv:$(TWO_DIGIT_VERSION)
+        runtime: $(DOCKER_NS)/fabric-javaenv:$(ARCH)-$(PROJECT_VERSION)
 
     node:
         # need node.js engine at runtime, currently available in baseimage
@@ -558,6 +558,7 @@ chaincode:
     # chaincode/importsysccs.go
     system:
         cscc: enable
+        bscc: enable
         lscc: enable
         escc: enable
         vscc: enable
