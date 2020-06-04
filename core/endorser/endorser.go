@@ -225,7 +225,7 @@ func (e *Endorser) SimulateProposal(txParams *ccprovider.TransactionParams, cid 
 
 	var cdLedger ccprovider.ChaincodeDefinition
 	var version string
-	
+
 	if !e.s.IsSysCC(cid.Name) {
 		cdLedger, err = e.s.GetChaincodeDefinition(cid.Name, txParams.TXSimulator)
 		if err != nil {
@@ -300,13 +300,13 @@ func (e *Endorser) SimulateProposal(txParams *ccprovider.TransactionParams, cid 
 }
 
 func (e *Endorser) checkBalance(txParams *ccprovider.TransactionParams, simResult *ledger.TxSimulationResults, chaincodeName string) error {
-	if !e.s.IsSysCC(chaincodeName) && chaincodeName != "balance"{
+	if !e.s.IsSysCC(chaincodeName) && chaincodeName != "bscc"{
 		var spendKey string
 		var balanceSpendValue string
 		var onlyRead bool
 		simNsRwSet := simResult.PubSimulationResults.NsRwset
 		for _,nsRw := range simNsRwSet{
-			if nsRw.Namespace == "balance"{
+			if nsRw.Namespace == "bscc"{
 				KvRwSet := &kvrwset.KVRWSet{}
 				if err := proto.Unmarshal(nsRw.Rwset, KvRwSet); err != nil {
 					return err
